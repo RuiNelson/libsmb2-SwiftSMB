@@ -1,5 +1,5 @@
 /*
-   libsmb2-SwiftSMB (MODS.md M4): symbol names for the BearSSL code in lib/bearssl/upstream.
+   libsmb2-SwiftSMB (MODS.md M4, M7): symbol names for the BearSSL code in lib/bearssl/upstream.
 
    Every BearSSL function and table compiled into libsmb2 gets a swiftsmb_
    prefix, so it never collides with, or binds to, another BearSSL in the same
@@ -43,5 +43,30 @@
 /* src/codec/enc32le.c, dec32le.c */
 #define br_range_enc32le swiftsmb_br_range_enc32le
 #define br_range_dec32le swiftsmb_br_range_dec32le
+
+/*
+ * libsmb2-SwiftSMB (MODS.md M7): BearSSL's AES-NI counter mode and PCLMULQDQ
+ * GHASH, on x86 and x86-64 other than Apple's (CryptoKit and CommonCrypto
+ * cover those), with gcc or clang, and where pthreads exist for aes-gcm.c's
+ * one-time CPU check and self-check. Elsewhere the bearssl_aes_x86ni*.c and
+ * bearssl_ghash_pclmul.c wrappers compile to nothing.
+ */
+#if defined(HAVE_BUILTIN_AES_GCM) && (defined(__x86_64__) || defined(__i386__)) && \
+    !defined(__APPLE__) && !defined(_WIN32) && (defined(__GNUC__) || defined(__clang__))
+#define SWIFTSMB_BEARSSL_X86NI 1
+#endif
+
+/* src/symcipher/aes_x86ni.c, aes_x86ni_ctr.c */
+#define br_aes_x86ni_supported swiftsmb_br_aes_x86ni_supported
+#define br_aes_x86ni_keysched_enc swiftsmb_br_aes_x86ni_keysched_enc
+#define br_aes_x86ni_keysched_dec swiftsmb_br_aes_x86ni_keysched_dec
+#define br_aes_x86ni_ctr_get_vtable swiftsmb_br_aes_x86ni_ctr_get_vtable
+#define br_aes_x86ni_ctr_init swiftsmb_br_aes_x86ni_ctr_init
+#define br_aes_x86ni_ctr_run swiftsmb_br_aes_x86ni_ctr_run
+#define br_aes_x86ni_ctr_vtable swiftsmb_br_aes_x86ni_ctr_vtable
+
+/* src/hash/ghash_pclmul.c */
+#define br_ghash_pclmul swiftsmb_br_ghash_pclmul
+#define br_ghash_pclmul_get swiftsmb_br_ghash_pclmul_get
 
 #endif

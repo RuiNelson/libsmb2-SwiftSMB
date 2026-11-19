@@ -12,6 +12,14 @@ files `../aes-gcm.c` uses:
 The exception is AES-128-GCM where libsmb2 uses CommonCrypto (Apple): `../aes-gcm.c` wraps libsmb2's
 `AES128_ECB_encrypt()` in a BearSSL counter-mode class there, as it is faster than `aes_ct64`.
 
+Modification M7 adds BearSSL's x86 hardware code, used on x86 and x86-64 other than Apple's before the software
+path above: AES-NI in counter mode (`src/symcipher/aes_x86ni.c`, `aes_x86ni_ctr.c`) and the PCLMULQDQ GHASH
+(`src/hash/ghash_pclmul.c`). BearSSL enables these instructions per function (`BR_TARGET`), and
+`br_aes_x86ni_ctr_get_vtable()` and `br_ghash_pclmul_get()` return `NULL` when the CPU or the compiler lacks them.
+`../aes-gcm.c` checks CPUID and runs a self-check against the software path before it uses them. Their wrappers
+compile only where `swiftsmb_bearssl.h` defines `SWIFTSMB_BEARSSL_X86NI`. On AArch64, M7 uses our own
+`../aes-gcm-armv8.c`, since BearSSL has no Arm code.
+
 BearSSL is under the MIT license (`upstream/LICENSE.txt`), which is compatible with libsmb2's LGPL-2.1-or-later.
 The files of ours here are under the LGPL-2.1-or-later.
 
@@ -32,7 +40,8 @@ The files of ours here are under the LGPL-2.1-or-later.
 ## Copied files
 
 From BearSSL `v0.6` (commit `8ef7680081c61b486622f2d983c0d3d21e83caad`, https://www.bearssl.org/git/BearSSL),
-unmodified. The five algorithm files are identical on BearSSL's `master` as of April 2026.
+unmodified. The five M4 algorithm files are identical on BearSSL's `master` as of April 2026, and the three M7 files
+on `master` as of November 2026.
 
 | File | SHA-256 |
 |---|---|
@@ -46,6 +55,9 @@ unmodified. The five algorithm files are identical on BearSSL's `master` as of A
 | `upstream/src/symcipher/aes_ct64_ctr.c` | `713a6e5afafa06f9bd608d5552abba5d38f5790a7d58f2c397c9257904a2943f` |
 | `upstream/src/codec/enc32le.c` | `7faa71643fc74570fd4c550974a075ec05485a0b3805cbdc826d662cb347e79b` |
 | `upstream/src/codec/dec32le.c` | `fb45ce9e370d72c495dfbb08267e2fd32dcf5215c28df5d2db24f842b2d2d43a` |
+| `upstream/src/symcipher/aes_x86ni.c` (M7) | `22d6a00145c86407752103e75f1b5a31defef8d0a9821192a6f0808e656d454a` |
+| `upstream/src/symcipher/aes_x86ni_ctr.c` (M7) | `cbc622657b5663024591631592822b82605deea91704714e98584d7ad9456518` |
+| `upstream/src/hash/ghash_pclmul.c` (M7) | `3d7e2458ca4cfd9a8a1612dc56334b08b20d5b7ebc660ef60df715a2f5c75a8b` |
 | `upstream/inc/bearssl.h` | `5e73cb64005a5efd5082932bb9b7a3301a748969841c45d7f61123006e9ca5fe` |
 | `upstream/inc/bearssl_aead.h` | `9d90afbc65535335517c028817ac0704af6b58971f2c262a65eb26e0b4099201` |
 | `upstream/inc/bearssl_block.h` | `a00b4a48c42c824f2ec4ee775672df9cec86ad455b08cb8ae7eb8c89e63d082a` |
@@ -65,7 +77,7 @@ is needed even though only the files above are compiled.
 
 ## Speed
 
-Without the CryptoKit hook, 1 MiB messages, -O2 build:
+Without the CryptoKit hook or M7's hardware path, 1 MiB messages, -O2 build:
 
 | | Apple M4 | Linux arm64 (same M4, Docker) |
 |---|---|---|
@@ -73,13 +85,22 @@ Without the CryptoKit hook, 1 MiB messages, -O2 build:
 | AES-128-GCM (BearSSL `aes_ct64`) | ~230 MB/s | ~200 MB/s (used on Linux and Android) |
 | AES-256-GCM (BearSSL `aes_ct64`) | ~177 MB/s | ~158 MB/s |
 
+M7's hardware path, 1 MiB messages, -O2, in Docker on the same M4 (Linux arm64 native; Linux amd64 emulated, so
+indicative only):
+
+| | Linux arm64 gcc | Linux arm64 clang | Linux amd64 gcc | Linux amd64 clang |
+|---|---|---|---|---|
+| AES-128-GCM | ~4500 MB/s | ~6100 MB/s | ~3700 MB/s | ~3800 MB/s |
+| AES-256-GCM | ~4200 MB/s | ~5600 MB/s | ~3200 MB/s | ~3300 MB/s |
+
 ## Updating
 
 1. Check out the new BearSSL release tag in a separate clone.
 2. Copy the files above over `upstream/`, and update the tag, commit, and hashes in this file.
 3. Build. If a copied file calls a BearSSL function that is not compiled here, add its source file and a
    `bearssl_*.c` wrapper. If it defines a new global symbol, add its `swiftsmb_` name to `swiftsmb_bearssl.h`:
-   `nm -g` on the `bearssl_*.o` objects must show no `br_` symbol.
+   `nm -g` on the `bearssl_*.o` objects must show no `br_` symbol (build for x86-64 too, where the M7 wrappers
+   compile).
 4. Check the result against the GCM test vectors (McGrew–Viega test cases 2–4 and 14–16) and a full OpenSSL build,
    and against a Samba server with `server smb3 encryption algorithms` set to `AES-128-GCM` and to `AES-256-GCM`,
    with SwiftSMB's CryptoKit hook and with `swiftsmb_set_gcm_seal(NULL)`.

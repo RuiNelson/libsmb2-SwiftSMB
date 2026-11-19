@@ -109,9 +109,10 @@ Then check every entry below against the merged code, rebuild SwiftSMB, and run 
     (`lib/bearssl/swiftsmb_bearssl.h`), so they never collide with another BearSSL in the same process.
     `lib/bearssl/UPSTREAM.md` has the file list, hashes, layout, and update procedure.
   - `swiftsmb_set_gcm_seal()` (`include/smb2/swiftsmb-gcm.h`) installs another GCM implementation that seals a whole
-    message at once. SwiftSMB installs CryptoKit's `AES.GCM` on Apple platforms, and BearSSL is then not used. On Linux, M6 tries the
-    system's OpenSSL before BearSSL. The
+    message at once. SwiftSMB installs CryptoKit's `AES.GCM` on Apple platforms, and BearSSL is then not used. The
     `swiftsmb_` prefix marks it as this fork's API.
+  - `smb2_aes_gcm()` tries, in order: that hook; on Linux, the system's OpenSSL (M6); except on Apple platforms, the
+    CPU's AES instructions (M7); and last BearSSL's software GCM described above.
 - **Why:** upstream builds GCM only with OpenSSL, and SwiftSMB does not link OpenSSL (OpenSSL 3+ is Apache-2.0,
   which would force LGPL-3 on the library). Without GCM, servers restricted to GCM, such as AES-256-GCM only, refuse
   encrypted connections.
@@ -141,7 +142,7 @@ Then check every entry below against the merged code, rebuild SwiftSMB, and run 
   `EVP_Cipher*` functions), checks it with a known-answer test (NIST test cases 2 and 14), and then seals or opens each
   message through `EVP_CipherInit_ex` and friends. Anything that stops it before it touches the data (no library, a
   failed check, a message over `INT_MAX`, a cipher the library lacks) returns `SMB2_AES_GCM_UNAVAILABLE`, and
-  `smb2_aes_gcm()` falls through to BearSSL. A failure after the data was touched, a tag that does not match
+  `smb2_aes_gcm()` falls through to the CPU's AES instructions (M7), then BearSSL. A failure after the data was touched, a tag that does not match
   included, is final.
 - **Why:** OpenSSL uses AES-NI or the ARMv8 AES instructions, so it seals at gigabytes per second, where BearSSL's
   constant-time software AES does 150 to 200 MB/s.
@@ -150,17 +151,61 @@ Then check every entry below against the merged code, rebuild SwiftSMB, and run 
   and under which license, is up to the system. The library is loaded by fixed SONAME, never by a path or from the
   environment's directories beyond the dynamic loader's own search.
 - **Not on Android:** applications cannot `dlopen` the system's `libcrypto` there. Static or musl builds without
-  `dlopen`, or without OpenSSL, use BearSSL.
+  `dlopen`, or without OpenSSL, use M7 or BearSSL.
 - **Files:** `lib/aes-gcm-dlopen.c`, `lib/aes-gcm-dlopen.h` (new), and a hook in `lib/aes-gcm.c`. The build links
   `libdl` on Linux (SwiftSMB's `Package.swift`). Upstream's CMake and autotools builds do not compile the new files.
 - **Upstream:** none.
 - **Drop when:** upstream supports GCM without linking OpenSSL, or SwiftSMB stops needing a software fallback.
 
+### M7. AES-GCM with the CPU's AES instructions (ARMv8 and x86)
+
+- **What:** with `HAVE_BUILTIN_AES_GCM`, on platforms other than Apple's, `smb2_aes_gcm()` seals and opens with the
+  CPU's AES and carry-less multiply instructions after M6 (the system's OpenSSL) and before BearSSL's software GCM.
+  - AArch64 (little-endian, Linux and Android): `lib/aes-gcm-armv8.c`, our own code with `arm_neon.h` intrinsics.
+    AES with `AESE`/`AESMC` (`vaeseq_u8`, `vaesmcq_u8`), the key schedule included (SubWord through `AESE`, so no
+    table lookups); GHASH with `PMULL` (`vmull_p64`) on bit-reversed bytes (`vrbitq_u8`), four blocks per reduction
+    with H to H^4; counter mode four blocks at a time; GHASH after encrypting and before decrypting, in 4 KiB passes;
+    a constant-time tag check. The key schedule and H are wiped on return. The instructions are enabled per function
+    (`target("neon,aes")` for clang, `target("+simd+crypto")` for gcc), not with `-march`. Detection:
+    `getauxval(AT_HWCAP)` with `HWCAP_ASIMD`, `HWCAP_AES` and `HWCAP_PMULL` (bits 1, 3 and 4); on any other system the
+    path reports itself unavailable.
+  - x86 and x86-64: BearSSL v0.6's own AES-NI counter mode and PCLMULQDQ GHASH (`src/symcipher/aes_x86ni.c`,
+    `aes_x86ni_ctr.c`, `src/hash/ghash_pclmul.c`), unmodified in `lib/bearssl/upstream`, compiled by
+    `lib/bearssl/bearssl_aes_x86ni.c`, `bearssl_aes_x86ni_ctr.c` and `bearssl_ghash_pclmul.c` with `swiftsmb_` names,
+    and run through the same BearSSL GCM as the software path. BearSSL enables the instructions per function.
+    Detection: CPUID leaf 1 (SSE2, SSSE3, SSE4.1, AES-NI, PCLMULQDQ) in `lib/aes-gcm.c`, then
+    `br_aes_x86ni_ctr_get_vtable()` and `br_ghash_pclmul_get()`, which return `NULL` when BearSSL finds the CPU or the
+    compiler lacking.
+  - Other architectures (32-bit Arm included), big-endian AArch64, Windows, and compilers other than gcc 8+ and
+    clang 8+ (gcc 4.8+ for x86) compile none of it and use the software path.
+  - Safety: no AES, PMULL or PCLMULQDQ instruction runs before the CPU check passes; they live only in functions with
+    target attributes, which nothing calls before it. Once per process (`pthread_once`), before the first use, a
+    self-check runs NIST GCM test cases 2 and 14, and compares the hardware path with BearSSL's software GCM
+    (`aes_ct64`, `ghash_ctmul64`) for AES-128 and AES-256 over messages of 151, 4179 and 0 bytes with AAD of 77, 32
+    and 13 bytes, sealing and opening, and checks that a tampered tag, ciphertext or AAD is refused. If anything
+    differs, the hardware path is not used and `smb2_aes_gcm()` falls through to BearSSL's software GCM. A request
+    the ARMv8 code does not take (more than GCM's 2^32 - 2 blocks) also falls through, before touching the data.
+- **Why:** where M6 does not apply (Android, Linux without a usable `libcrypto`, static builds), GCM ran on BearSSL's
+  constant-time software AES at 150 to 200 MB/s. The CPU's instructions seal at gigabytes per second, and are
+  constant-time too.
+- **License:** `lib/aes-gcm-armv8.c` is ours (LGPL-2.1-or-later); the x86 code is BearSSL's (MIT). No OpenSSL, Linux
+  kernel, or other Apache-2.0 or GPL code was used.
+- **Files:** `lib/aes-gcm-armv8.c`, `lib/aes-gcm-armv8.h` (new), `lib/aes-gcm.c` (the hardware step, CPU check and
+  self-check), `lib/bearssl/bearssl_aes_x86ni.c`, `bearssl_aes_x86ni_ctr.c`, `bearssl_ghash_pclmul.c` (new),
+  `lib/bearssl/swiftsmb_bearssl.h` (`SWIFTSMB_BEARSSL_X86NI` and the new names), the three BearSSL files in
+  `lib/bearssl/upstream`, and `lib/bearssl/UPSTREAM.md`. Upstream's CMake and autotools builds do not compile the new
+  files.
+- **Upstream:** none.
+- **Drop when:** upstream supports GCM with hardware AES without linking OpenSSL, or with M4.
+
 ## SwiftPM packaging in SwiftSMB
 
 These are not changes to libsmb2's code, and they stay in SwiftSMB unless the fork becomes a Swift package itself.
 SwiftSMB's `Package.swift` compiles this fork's `lib/` (excluding `lib/bearssl/upstream`, which the wrappers compile),
-with `HAVE_BUILTIN_AES_GCM` defined, and `SMB2_GCM_DLOPEN_OPENSSL` on Linux.
+with `HAVE_BUILTIN_AES_GCM` defined, and `SMB2_GCM_DLOPEN_OPENSSL` on Linux. M7 needs no flag of its own: it selects
+itself by architecture and compiler, and enables the CPU's instructions per function. GCM is then sealed by the
+CryptoKit hook (Apple), else the system's OpenSSL (Linux, M6), else the CPU's AES instructions (M7), else BearSSL's
+software GCM (M4).
 
 - `Sources/libsmb2/include/config.h`: picks this fork's `include/linux/config.h` or `include/apple/config.h`.
 - `Sources/libsmb2/include/module.modulemap`: module `SMB2` with `SMB2.Internal`, `SMB2.Raw`, and `SMB2.GCM`.
