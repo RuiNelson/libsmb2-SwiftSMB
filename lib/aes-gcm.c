@@ -4,6 +4,9 @@
    Two implementations:
    - A hook installed with swiftsmb_set_gcm_seal() (swiftsmb-gcm.h). SwiftSMB
      installs CryptoKit's AES.GCM on Apple platforms.
+   - On Linux (not Android), when SMB2_GCM_DLOPEN_OPENSSL is defined, the
+     system's OpenSSL libcrypto, loaded with dlopen (aes-gcm-dlopen.c,
+     MODS.md M6), if there is a usable one.
    - Otherwise BearSSL's GCM (lib/bearssl) with the constant-time
      br_ghash_ctmul64. Its block cipher is BearSSL's constant-time br_aes_ct64
      in counter mode, for AES-256-GCM (libsmb2 has no AES-256) and for
@@ -36,6 +39,7 @@
 
 #include "aes.h"
 #include "aes-gcm.h"
+#include "aes-gcm-dlopen.h"
 #include "swiftsmb-gcm.h"
 
 #define GCM_BLOCK 16
@@ -134,6 +138,14 @@ int smb2_aes_gcm(int enc, const uint8_t *key, size_t key_len, const uint8_t *non
         if (hook != NULL) {
                 return hook(enc ? 1 : 0, key, key_len, nonce, aad, aad_len, p, plen, tag) == 0 ? 0 : -1;
         }
+
+#if defined(SMB2_GCM_DLOPEN_OPENSSL) && defined(__linux__) && !defined(__ANDROID__)
+        /* libsmb2-SwiftSMB (MODS.md M6): the system's OpenSSL first. */
+        rc = smb2_aes_gcm_openssl(enc, key, key_len, nonce, aad, aad_len, p, plen, tag);
+        if (rc != SMB2_AES_GCM_UNAVAILABLE) {
+                return rc;
+        }
+#endif
 
 #ifdef SMB2_GCM_LIBSMB2_AES128
         ctr.vtable = key_len == 16 ? &libsmb2_aes128_ctr_vtable : &br_aes_ct64_ctr_vtable;

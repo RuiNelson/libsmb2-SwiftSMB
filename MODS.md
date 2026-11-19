@@ -109,7 +109,8 @@ Then check every entry below against the merged code, rebuild SwiftSMB, and run 
     (`lib/bearssl/swiftsmb_bearssl.h`), so they never collide with another BearSSL in the same process.
     `lib/bearssl/UPSTREAM.md` has the file list, hashes, layout, and update procedure.
   - `swiftsmb_set_gcm_seal()` (`include/smb2/swiftsmb-gcm.h`) installs another GCM implementation that seals a whole
-    message at once. SwiftSMB installs CryptoKit's `AES.GCM` on Apple platforms, and BearSSL is then not used. The
+    message at once. SwiftSMB installs CryptoKit's `AES.GCM` on Apple platforms, and BearSSL is then not used. On Linux, M6 tries the
+    system's OpenSSL before BearSSL. The
     `swiftsmb_` prefix marks it as this fork's API.
 - **Why:** upstream builds GCM only with OpenSSL, and SwiftSMB does not link OpenSSL (OpenSSL 3+ is Apache-2.0,
   which would force LGPL-3 on the library). Without GCM, servers restricted to GCM, such as AES-256-GCM only, refuse
@@ -132,11 +133,34 @@ Then check every entry below against the merged code, rebuild SwiftSMB, and run 
 - **Upstream:** none needed. Upstream's own build systems detect these.
 - **Drop when:** upstream ships an equivalent configuration for builds without a configure step.
 
+### M6. System OpenSSL for AES-GCM on Linux, through dlopen
+
+- **What:** with `SMB2_GCM_DLOPEN_OPENSSL` defined (SwiftSMB defines it on Linux, not on Android), `smb2_aes_gcm()` tries
+  the system's `libcrypto` (SONAMEs `libcrypto.so.3`, `.so.4`, `.so.1.1`, in that order) before BearSSL.
+  `lib/aes-gcm-dlopen.c` loads it once with `dlopen` and `dlsym` (the `EVP_CIPHER_CTX_*`, `EVP_aes_{128,256}_gcm`, and
+  `EVP_Cipher*` functions), checks it with a known-answer test (NIST test cases 2 and 14), and then seals or opens each
+  message through `EVP_CipherInit_ex` and friends. Anything that stops it before it touches the data (no library, a
+  failed check, a message over `INT_MAX`, a cipher the library lacks) returns `SMB2_AES_GCM_UNAVAILABLE`, and
+  `smb2_aes_gcm()` falls through to BearSSL. A failure after the data was touched, a tag that does not match
+  included, is final.
+- **Why:** OpenSSL uses AES-NI or the ARMv8 AES instructions, so it seals at gigabytes per second, where BearSSL's
+  constant-time software AES does 150 to 200 MB/s.
+- **License:** nothing of OpenSSL is compiled or linked in, and no OpenSSL header is included (the few constants and
+  types are declared in the file), so no Apache-2.0 code becomes part of libsmb2. Whether the system has OpenSSL,
+  and under which license, is up to the system. The library is loaded by fixed SONAME, never by a path or from the
+  environment's directories beyond the dynamic loader's own search.
+- **Not on Android:** applications cannot `dlopen` the system's `libcrypto` there. Static or musl builds without
+  `dlopen`, or without OpenSSL, use BearSSL.
+- **Files:** `lib/aes-gcm-dlopen.c`, `lib/aes-gcm-dlopen.h` (new), and a hook in `lib/aes-gcm.c`. The build links
+  `libdl` on Linux (SwiftSMB's `Package.swift`). Upstream's CMake and autotools builds do not compile the new files.
+- **Upstream:** none.
+- **Drop when:** upstream supports GCM without linking OpenSSL, or SwiftSMB stops needing a software fallback.
+
 ## SwiftPM packaging in SwiftSMB
 
 These are not changes to libsmb2's code, and they stay in SwiftSMB unless the fork becomes a Swift package itself.
 SwiftSMB's `Package.swift` compiles this fork's `lib/` (excluding `lib/bearssl/upstream`, which the wrappers compile),
-with `HAVE_BUILTIN_AES_GCM` defined.
+with `HAVE_BUILTIN_AES_GCM` defined, and `SMB2_GCM_DLOPEN_OPENSSL` on Linux.
 
 - `Sources/libsmb2/include/config.h`: picks this fork's `include/linux/config.h` or `include/apple/config.h`.
 - `Sources/libsmb2/include/module.modulemap`: module `SMB2` with `SMB2.Internal`, `SMB2.Raw`, and `SMB2.GCM`.
