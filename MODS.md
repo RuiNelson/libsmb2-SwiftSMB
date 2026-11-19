@@ -195,6 +195,14 @@ Then check every entry below against the merged code, rebuild SwiftSMB, and run 
   `lib/bearssl/swiftsmb_bearssl.h` (`SWIFTSMB_BEARSSL_X86NI` and the new names), the three BearSSL files in
   `lib/bearssl/upstream`, and `lib/bearssl/UPSTREAM.md`. Upstream's CMake and autotools builds do not compile the new
   files.
+- **Tests:** `tests/swiftsmb-aes-gcm/` (`aes-gcm-test.c`, `vectors.h`, `run.sh`; not part of upstream's CMake or
+  autotools builds). The program includes `lib/aes-gcm.c`, so it reaches every backend directly (software, the libsmb2
+  AES-128 with CommonCrypto, ARMv8, x86, the hardware path with its self-check, the system's OpenSSL, and
+  `smb2_aes_gcm()`), and runs each one the machine has against the NIST cases, OpenSSL-generated vectors, and the
+  software GCM over message lengths 0 to 100003 and AAD lengths 0 to 96, with tampering and concurrent first use. A
+  backend the machine lacks is reported as SKIP. A CPU that has the instructions but whose hardware path the self-check
+  refused fails the run. Run `tests/swiftsmb-aes-gcm/run.sh` (`CC=clang`, `SANITIZE=1` are honoured), on macOS, on
+  Linux arm64 and on Linux x86_64, after every change to the GCM code or a BearSSL update.
 - **Upstream:** none.
 - **Drop when:** upstream supports GCM with hardware AES without linking OpenSSL, or with M4.
 
