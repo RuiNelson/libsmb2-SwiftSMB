@@ -165,3 +165,13 @@
 #endif
 #define HAVE_DEV_URANDOM 1
 #endif
+
+/* libsmb2-SwiftSMB (MODS.md M1): AES through CommonCrypto (aes_apple.c)
+ * instead of the table-based reference AES, which is not constant-time.
+ * Only the CMake build detected the header; this config is what Xcode and
+ * Swift Package Manager builds use. */
+#if defined(__APPLE__) && defined(__has_include)
+#if __has_include(<CommonCrypto/CommonCryptor.h>)
+#define HAVE_COMMONCRYPTO_COMMONCRYPTOR_H 1
+#endif
+#endif

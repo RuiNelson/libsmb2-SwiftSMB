@@ -101,6 +101,20 @@ static int smb3_aesgcm(int enc, uint16_t cypher, uint8_t *key, uint8_t nonce[12]
 
 #define SMB3_GCM(smb2) ((smb2)->cypher == SMB2_ENCRYPTION_AES_128_GCM || \
                         (smb2)->cypher == SMB2_ENCRYPTION_AES_256_GCM)
+#elif defined(HAVE_BUILTIN_AES_GCM)
+/* libsmb2-SwiftSMB (MODS.md M4): AES-GCM without OpenSSL, through
+ * aes-gcm.c (BearSSL's GCM, or an installed implementation). */
+#include "aes-gcm.h"
+
+static int smb3_aesgcm(int enc, uint16_t cypher, uint8_t *key, uint8_t nonce[12], uint8_t aad[32],
+                       uint8_t *p, size_t plen, uint8_t tag[16])
+{
+        return smb2_aes_gcm(enc, key, cypher == SMB2_ENCRYPTION_AES_256_GCM ? 32 : 16,
+                            nonce, aad, 32, p, plen, tag);
+}
+
+#define SMB3_GCM(smb2) ((smb2)->cypher == SMB2_ENCRYPTION_AES_128_GCM || \
+                        (smb2)->cypher == SMB2_ENCRYPTION_AES_256_GCM)
 #else
 #define SMB3_GCM(smb2) 0
 #endif
@@ -173,7 +187,7 @@ smb3_encrypt_pdu(struct smb2_context *smb2,
                 }
         }
 
-#ifdef HAVE_OPENSSL
+#if defined(HAVE_OPENSSL) || defined(HAVE_BUILTIN_AES_GCM)
         if (SMB3_GCM(smb2)) {
                 rc = smb3_aesgcm(1, smb2->cypher, SEAL_KEY(smb2), &pdu->crypt[20],
                                  &pdu->crypt[20], &pdu->crypt[52], spl - 52, &pdu->crypt[4]);
@@ -202,7 +216,7 @@ smb3_do_decrypt_pdu(struct smb2_context *smb2)
         struct smb2_iovec *data = &smb2->in.iov[smb2->in.niov - 1];
         int rc;
 
-#ifdef HAVE_OPENSSL
+#if defined(HAVE_OPENSSL) || defined(HAVE_BUILTIN_AES_GCM)
         if (SMB3_GCM(smb2)) {
                 rc = smb3_aesgcm(0, smb2->cypher, UNSEAL_KEY(smb2), &hdr[20], &hdr[20],
                                  data->buf, data->len, &hdr[4]);

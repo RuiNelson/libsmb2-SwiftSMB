@@ -102,7 +102,7 @@ smb2_encode_encryption_context(struct smb2_context *smb2, struct smb2_pdu *pdu, 
                 /* the one we chose, 0 if we have none in common */
                 ciphers[n++] = smb2->cypher;
         } else {
-#ifdef HAVE_OPENSSL
+#if defined(HAVE_OPENSSL) || defined(HAVE_BUILTIN_AES_GCM) /* libsmb2-SwiftSMB (MODS.md M4) */
                 ciphers[n++] = SMB2_ENCRYPTION_AES_256_GCM;
                 ciphers[n++] = SMB2_ENCRYPTION_AES_128_GCM;
 #endif
@@ -381,7 +381,7 @@ smb2_parse_encryption_context(struct smb2_context *smb2,
         switch (rep->cypher) {
         case 0: /* no common cipher */
         case SMB2_ENCRYPTION_AES_128_CCM:
-#ifdef HAVE_OPENSSL
+#if defined(HAVE_OPENSSL) || defined(HAVE_BUILTIN_AES_GCM) /* libsmb2-SwiftSMB (MODS.md M4) */
         case SMB2_ENCRYPTION_AES_128_GCM:
         case SMB2_ENCRYPTION_AES_256_GCM:
 #endif
@@ -632,7 +632,7 @@ smb2_cipher_supported(uint16_t cipher)
 {
         switch (cipher) {
         case SMB2_ENCRYPTION_AES_128_CCM:
-#ifdef HAVE_OPENSSL
+#if defined(HAVE_OPENSSL) || defined(HAVE_BUILTIN_AES_GCM) /* libsmb2-SwiftSMB (MODS.md M4) */
         case SMB2_ENCRYPTION_AES_128_GCM:
         case SMB2_ENCRYPTION_AES_256_GCM:
 #endif
