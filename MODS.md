@@ -25,8 +25,9 @@ be lost or fought over at the next upstream merge.
 - **Licenses.** libsmb2 is LGPL-2.1-or-later. Code added here must be under a compatible license (LGPL-2.1-or-later
   for our own code; MIT, BSD, or similar for third-party code). Apache-2.0 (OpenSSL 3+) and LGPL-3/GPL-2 (Nettle)
   code would force LGPL-3 on the whole library, so it is not used.
-- **Third-party code only for what libsmb2 lacks.** Do not bring in another implementation of something libsmb2
-  already has.
+- **Improvements are welcome.** The fork may improve on upstream: faster, safer, or more complete code. Third-party
+  code may be added for something libsmb2 lacks or does worse, if its license is compatible, it is kept unmodified in
+  its own directory, and the entry says why it beats upstream's.
 
 ## Upstream base
 
@@ -97,9 +98,12 @@ Then check every entry below against the merged code, rebuild SwiftSMB, and run 
   - `lib/smb2-cmd-negotiate.c` offers and accepts the GCM ciphers with `HAVE_OPENSSL` or `HAVE_BUILTIN_AES_GCM`.
   - `lib/smb3-seal.c` keeps upstream's OpenSSL `smb3_aesgcm()`, and without OpenSSL defines one that calls
     `smb2_aes_gcm()` (`lib/aes-gcm.c`).
-  - `lib/aes-gcm.c` seals with BearSSL's GCM. AES-128-GCM uses libsmb2's own `AES128_ECB_encrypt()`, through a BearSSL
-    counter-mode class. libsmb2 has no AES-256, so AES-256-GCM uses BearSSL's constant-time `aes_ct64`.
-  - `lib/bearssl/upstream` holds BearSSL v0.6 (MIT) files, unmodified, only for what libsmb2 lacks: the GCM mode
+  - `lib/aes-gcm.c` seals with BearSSL's GCM. Both AES-128-GCM and AES-256-GCM use BearSSL's constant-time `aes_ct64` in
+    counter mode. The one exception is AES-128-GCM with CommonCrypto (Apple, `HAVE_COMMONCRYPTO_COMMONCRYPTOR_H`),
+    which uses libsmb2's own `AES128_ECB_encrypt()` (M1, M2), as it is faster there. libsmb2's reference AES, which
+    Linux and Android would otherwise use, is 3 to 4 times slower than `aes_ct64` (about 51 against 200 MB/s on Linux
+    arm64), expands the key for every block, and is not constant-time. libsmb2 has no AES-256.
+  - `lib/bearssl/upstream` holds BearSSL v0.6 (MIT) files, unmodified: the GCM mode
     (`src/aead/gcm.c` with the constant-time `src/hash/ghash_ctmul64.c`) and AES-256 (`aes_ct64`). The
     `lib/bearssl/bearssl_*.c` wrappers compile them with a `swiftsmb_` prefix on every symbol
     (`lib/bearssl/swiftsmb_bearssl.h`), so they never collide with another BearSSL in the same process.

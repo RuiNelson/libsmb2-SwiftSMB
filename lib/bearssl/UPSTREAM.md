@@ -1,15 +1,16 @@
 # BearSSL in libsmb2-SwiftSMB
 
 Part of modification M4 in `../../MODS.md`: AES-128-GCM and AES-256-GCM without OpenSSL. These are the BearSSL
-files `../aes-gcm.c` uses, only for what libsmb2 itself lacks:
+files `../aes-gcm.c` uses:
 
 - the GCM mode (GHASH, counter, tag): `src/aead/gcm.c` with the constant-time `src/hash/ghash_ctmul64.c`;
-- AES-256: libsmb2's AES (`../aes.c`, `../aes_reference.c`, `../aes_apple.c`) is AES-128 only, so AES-256-GCM uses
-  the constant-time `aes_ct64` (`src/symcipher/aes_ct64.c`, `aes_ct64_enc.c`, `aes_ct64_ctr.c`), plus the two
-  little-endian codec helpers it calls (`src/codec/enc32le.c`, `dec32le.c`).
+- AES, in counter mode: the constant-time `aes_ct64` (`src/symcipher/aes_ct64.c`, `aes_ct64_enc.c`,
+  `aes_ct64_ctr.c`), plus the two little-endian codec helpers it calls (`src/codec/enc32le.c`, `dec32le.c`). It
+  serves AES-256-GCM, which libsmb2's AES (`../aes.c`, AES-128 only) cannot, and AES-128-GCM, because libsmb2's
+  reference AES is 3 to 4 times slower and not constant-time.
 
-AES-128-GCM runs on libsmb2's own `AES128_ECB_encrypt()`, wrapped in a BearSSL counter-mode class in
-`../aes-gcm.c`.
+The exception is AES-128-GCM where libsmb2 uses CommonCrypto (Apple): `../aes-gcm.c` wraps libsmb2's
+`AES128_ECB_encrypt()` in a BearSSL counter-mode class there, as it is faster than `aes_ct64`.
 
 BearSSL is under the MIT license (`upstream/LICENSE.txt`), which is compatible with libsmb2's LGPL-2.1-or-later.
 The files of ours here are under the LGPL-2.1-or-later.
@@ -64,12 +65,13 @@ is needed even though only the files above are compiled.
 
 ## Speed
 
-Without the CryptoKit hook, 8 MiB, release build:
+Without the CryptoKit hook, 1 MiB messages, -O2 build:
 
 | | Apple M4 | Linux arm64 (same M4, Docker) |
 |---|---|---|
-| AES-128-GCM (libsmb2's AES) | ~590 MB/s (`../aes_apple.c`, CommonCrypto) | ~47 MB/s (reference AES, key expanded per block) |
-| AES-256-GCM (BearSSL `aes_ct64`) | ~165 MB/s | ~138 MB/s |
+| AES-128-GCM (libsmb2's AES) | ~620 MB/s (`../aes_apple.c`, CommonCrypto; used on Apple) | ~51 MB/s (reference AES, key expanded per block; no longer used) |
+| AES-128-GCM (BearSSL `aes_ct64`) | ~230 MB/s | ~200 MB/s (used on Linux and Android) |
+| AES-256-GCM (BearSSL `aes_ct64`) | ~177 MB/s | ~158 MB/s |
 
 ## Updating
 

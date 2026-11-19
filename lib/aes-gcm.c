@@ -5,9 +5,14 @@
    - A hook installed with swiftsmb_set_gcm_seal() (swiftsmb-gcm.h). SwiftSMB
      installs CryptoKit's AES.GCM on Apple platforms.
    - Otherwise BearSSL's GCM (lib/bearssl) with the constant-time
-     br_ghash_ctmul64. Its block cipher is libsmb2's own AES128_ECB_encrypt()
-     (aes.c) for AES-128-GCM. libsmb2 has no AES-256, so AES-256-GCM uses
-     BearSSL's constant-time br_aes_ct64 in counter mode.
+     br_ghash_ctmul64. Its block cipher is BearSSL's constant-time br_aes_ct64
+     in counter mode, for AES-256-GCM (libsmb2 has no AES-256) and for
+     AES-128-GCM. The exception is AES-128-GCM with CommonCrypto
+     (HAVE_COMMONCRYPTO_COMMONCRYPTOR_H, Apple), which uses libsmb2's own
+     AES128_ECB_encrypt() (aes_apple.c), as that is faster than br_aes_ct64.
+     libsmb2's reference AES, which every other build would use, is 3 to 4
+     times slower than br_aes_ct64, expands the key for every block, and is
+     not constant-time.
 
    Built only with HAVE_BUILTIN_AES_GCM; otherwise libsmb2 offers GCM only
    with OpenSSL, as upstream does.
@@ -51,6 +56,9 @@ static void cleanse(void *ptr, size_t len)
                 *p++ = 0;
         }
 }
+
+#ifdef HAVE_COMMONCRYPTO_COMMONCRYPTOR_H
+#define SMB2_GCM_LIBSMB2_AES128 1
 
 /*
  * A BearSSL counter-mode class over libsmb2's AES-128, which takes the raw
@@ -104,6 +112,7 @@ static const br_block_ctr_class libsmb2_aes128_ctr_vtable = {
         libsmb2_aes128_ctr_init,
         libsmb2_aes128_ctr_run
 };
+#endif /* HAVE_COMMONCRYPTO_COMMONCRYPTOR_H */
 
 int smb2_aes_gcm(int enc, const uint8_t *key, size_t key_len, const uint8_t *nonce,
                  const uint8_t *aad, size_t aad_len, uint8_t *p, size_t plen, uint8_t *tag)
@@ -111,8 +120,10 @@ int smb2_aes_gcm(int enc, const uint8_t *key, size_t key_len, const uint8_t *non
         swiftsmb_gcm_seal_fn hook = __atomic_load_n(&swiftsmb_gcm_hook, __ATOMIC_ACQUIRE);
         union {
                 const br_block_ctr_class *vtable;
+#ifdef SMB2_GCM_LIBSMB2_AES128
                 libsmb2_aes128_ctr_keys aes128;
-                br_aes_ct64_ctr_keys aes256;
+#endif
+                br_aes_ct64_ctr_keys ct64;
         } ctr;
         br_gcm_context gcm;
         int rc;
@@ -124,7 +135,11 @@ int smb2_aes_gcm(int enc, const uint8_t *key, size_t key_len, const uint8_t *non
                 return hook(enc ? 1 : 0, key, key_len, nonce, aad, aad_len, p, plen, tag) == 0 ? 0 : -1;
         }
 
+#ifdef SMB2_GCM_LIBSMB2_AES128
         ctr.vtable = key_len == 16 ? &libsmb2_aes128_ctr_vtable : &br_aes_ct64_ctr_vtable;
+#else
+        ctr.vtable = &br_aes_ct64_ctr_vtable;
+#endif
         ctr.vtable->init(&ctr.vtable, key, key_len);
         br_gcm_init(&gcm, &ctr.vtable, br_ghash_ctmul64);
         br_gcm_reset(&gcm, nonce, GCM_IV);
